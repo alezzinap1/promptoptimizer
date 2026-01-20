@@ -34,7 +34,7 @@ cp .env.example .env
 
 4. Заполните `.env` файл своими API ключами:
    - **TELEGRAM_BOT_TOKEN** - получите у [@BotFather](https://t.me/BotFather) в Telegram
-   - **GEMINI_API_KEY** - получите на [Google AI Studio](https://makersuite.google.com/app/apikey)
+   - (Не работает сейчас) **GEMINI_API_KEY** - получите на [Google AI Studio](https://makersuite.google.com/app/apikey)
    - **DEEPSEEK_API_KEY** - получите на [DeepSeek Platform](https://platform.deepseek.com/)
 
    Примечание: Можно указать только один из API ключей, если используете только один провайдер.
@@ -89,15 +89,7 @@ prompt-optimizer/
 - `/help` - справка по использованию
 - `/settings` - открыть меню настроек
 
-## Особенности
 
-- Все настройки пользователя сохраняются в локальной SQLite базе данных
-- Поддержка асинхронной работы с API
-- Обработка ошибок с информативными сообщениями
-- Метрики качества оптимизации промптов
 
-## Лицензия
-
-Проект создан в образовательных целях.
 
 
