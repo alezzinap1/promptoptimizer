@@ -4,77 +4,205 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 def get_settings_keyboard() -> InlineKeyboardMarkup:
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="🔄 Выбрать LLM", callback_data="settings_llm"),
-            InlineKeyboardButton(text="🧪 A/B тестирование", callback_data="settings_ab")
-        ],
-        [
-            InlineKeyboardButton(text="✏️ Редактировать meta-промпт", callback_data="settings_meta")
-        ],
-        [
-            InlineKeyboardButton(text="📝 Редактировать контекст", callback_data="settings_context")
+            InlineKeyboardButton(text="🔄 LLM", callback_data="settings_llm"),
+            InlineKeyboardButton(text="🔄 Режим", callback_data="settings_mode"),
+            InlineKeyboardButton(text="⚙️ Кастомизация", callback_data="settings_customization")
         ],
         [
             InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")
+        ]
+    ])
+    return keyboard
+
+
+def get_customization_keyboard() -> InlineKeyboardMarkup:
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👤 Предпочтения", callback_data="settings_preferences")],
+        [
+            InlineKeyboardButton(text="✏️ Meta-промпт", callback_data="settings_meta"),
+            InlineKeyboardButton(text="📝 Контекст", callback_data="settings_context")
+        ],
+        [InlineKeyboardButton(text="🌡 Температура", callback_data="settings_temperature")],
+        [
+            InlineKeyboardButton(text="◀️ Назад", callback_data="settings_back"),
+            InlineKeyboardButton(text="🏠 В меню", callback_data="main_menu")
+        ]
+    ])
+    return keyboard
+
+
+def get_temperature_keyboard(current: float) -> InlineKeyboardMarkup:
+    options = (0.3, 0.4, 0.5, 0.6, 0.7)
+    row = []
+    for t in options:
+        label = f"{'✅ ' if abs(current - t) < 0.01 else ''}{t}"
+        row.append(InlineKeyboardButton(text=label, callback_data=f"temp_{t}"))
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        row,
+        [
+            InlineKeyboardButton(text="◀️ Назад", callback_data="customization_back"),
+            InlineKeyboardButton(text="🏠 В меню", callback_data="main_menu")
         ]
     ])
     return keyboard
 
 
 def get_llm_keyboard(current_provider: str) -> InlineKeyboardMarkup:
-    gemini_text = "✅ Gemini" if current_provider == "gemini" else "Gemini"
-    deepseek_text = "✅ DeepSeek" if current_provider == "deepseek" else "DeepSeek"
-    
+    providers = ("deepseek", "openai", "gemini", "grok", "nemo", "mimo")
+    labels = {
+        "deepseek": "DeepSeek",
+        "openai": "ChatGPT",
+        "gemini": "Gemini",
+        "grok": "Grok 4 Fast (xAI)",
+        "nemo": "Mistral Nemo",
+        "mimo": "Xiaomi Mimo V2 Flash",
+    }
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text=gemini_text, callback_data="llm_gemini")
-        ],
+            InlineKeyboardButton(
+                text=f"{'✅ ' if current_provider == p else ''}{labels[p]}",
+                callback_data=f"llm_{p}"
+            )
+        ]
+        for p in providers
+    ] + [
         [
-            InlineKeyboardButton(text=deepseek_text, callback_data="llm_deepseek")
+            InlineKeyboardButton(text="◀️ Назад", callback_data="settings_back"),
+            InlineKeyboardButton(text="🏠 В меню", callback_data="main_menu")
+        ]
+    ])
+    return keyboard
+
+
+def get_mode_keyboard(current_mode: str) -> InlineKeyboardMarkup:
+    simple_text = "✅ Простой" if current_mode == "simple" else "Простой"
+    agent_text = "✅ Агент" if current_mode == "agent" else "Агент"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=simple_text, callback_data="mode_simple"),
+            InlineKeyboardButton(text=agent_text, callback_data="mode_agent")
         ],
         [
             InlineKeyboardButton(text="◀️ Назад", callback_data="settings_back"),
-            InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")
+            InlineKeyboardButton(text="🏠 В меню", callback_data="main_menu")
         ]
     ])
     return keyboard
 
 
-def get_ab_test_keyboard() -> InlineKeyboardMarkup:
+def get_result_nav_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура под результатом: переход отправляет новое сообщение, результат остаётся в истории."""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Выбрать вариант A", callback_data="ab_select_a"),
-            InlineKeyboardButton(text="✅ Выбрать вариант B", callback_data="ab_select_b")
-        ],
-        [
-            InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")
+            InlineKeyboardButton(text="🏠 Главное меню", callback_data="nav_main"),
+            InlineKeyboardButton(text="⚙️ Настройки", callback_data="nav_settings")
         ]
     ])
     return keyboard
 
 
-def get_ab_toggle_keyboard(ab_enabled: bool) -> InlineKeyboardMarkup:
-    status_text = "✅ Включено" if ab_enabled else "❌ Выключено"
-    toggle_text = "❌ Выключить" if ab_enabled else "✅ Включить"
-    
+def get_agent_result_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура под ответом агента с промптом: принять промпт (обнулить историю) + навигация."""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Принять промпт", callback_data="agent_accept_prompt")],
         [
-            InlineKeyboardButton(text=f"{status_text} → {toggle_text}", callback_data="ab_toggle")
-        ],
-        [
-            InlineKeyboardButton(text="◀️ Назад", callback_data="settings_back"),
-            InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")
+            InlineKeyboardButton(text="🏠 Главное меню", callback_data="nav_main"),
+            InlineKeyboardButton(text="⚙️ Настройки", callback_data="nav_settings")
         ]
     ])
     return keyboard
+
+
+def get_agent_questions_keyboard(questions: list, answers: dict) -> InlineKeyboardMarkup:
+    """Клавиатура для ответов на уточняющие вопросы агента. Варианты — столбиком."""
+    rows = []
+    for q_idx, q in enumerate(questions):
+        opts = q.get("options") or []
+        for opt_idx, opt in enumerate(opts):
+            label = (opt[:37] + "…") if len(opt) > 40 else opt
+            if answers.get(q_idx) == opt_idx:
+                label = "✅ " + label
+            rows.append([InlineKeyboardButton(text=label, callback_data=f"aq_{q_idx}_{opt_idx}")])
+    rows.append([InlineKeyboardButton(text="✅ Готово", callback_data="aq_done")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def get_agent_question_single_keyboard(
+    q_idx: int, question: dict, answers: dict, is_last: bool
+) -> InlineKeyboardMarkup:
+    """Клавиатура под одним вопросом: варианты ответа столбиком, при is_last — кнопка «Готово»."""
+    opts = question.get("options") or []
+    rows = []
+    for opt_idx, opt in enumerate(opts):
+        label = (opt[:37] + "…") if len(opt) > 40 else opt
+        if answers.get(q_idx) == opt_idx:
+            label = "✅ " + label
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"aq_{q_idx}_{opt_idx}")])
+    if is_last:
+        rows.append([InlineKeyboardButton(text="✅ Готово", callback_data="aq_done")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def get_back_keyboard() -> InlineKeyboardMarkup:
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="◀️ Назад", callback_data="settings_back")
+            InlineKeyboardButton(text="◀️ Назад", callback_data="settings_back"),
+            InlineKeyboardButton(text="🏠 В меню", callback_data="main_menu")
+        ]
+    ])
+    return keyboard
+
+
+def get_preference_style_keyboard() -> InlineKeyboardMarkup:
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="Точные, по делу", callback_data="pref_style_precise"),
+            InlineKeyboardButton(text="Сбалансированные", callback_data="pref_style_balanced")
         ],
         [
-            InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")
+            InlineKeyboardButton(text="Развёрнутые с примерами", callback_data="pref_style_creative")
+        ]
+    ])
+    return keyboard
+
+
+GOAL_OPTIONS = [
+    ("code", "Код и техника"),
+    ("study", "Учёба и образование"),
+    ("creative", "Тексты и креатив"),
+    ("analysis", "Анализ данных"),
+    ("work", "Работа и бизнес"),
+    ("research", "Исследования"),
+    ("writing", "Письмо и редактура"),
+    ("hobby", "Хобби и развлечения"),
+    ("learning", "Самообразование"),
+    ("other", "Разное"),
+]
+
+
+def get_preference_goal_keyboard(selected: list) -> InlineKeyboardMarkup:
+    rows = []
+    row = []
+    for goal_id, label in GOAL_OPTIONS:
+        prefix = "✅ " if goal_id in selected else ""
+        row.append(InlineKeyboardButton(text=f"{prefix}{label}", callback_data=f"pref_goal_toggle_{goal_id}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="✅ Готово", callback_data="pref_goal_done")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def get_preference_format_keyboard() -> InlineKeyboardMarkup:
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="Короткие и чёткие", callback_data="pref_format_short"),
+            InlineKeyboardButton(text="Структурированные", callback_data="pref_format_structured")
+        ],
+        [
+            InlineKeyboardButton(text="Подробные с инструкциями", callback_data="pref_format_detailed")
         ]
     ])
     return keyboard
@@ -83,10 +211,8 @@ def get_back_keyboard() -> InlineKeyboardMarkup:
 def get_cancel_edit_keyboard() -> InlineKeyboardMarkup:
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_edit")
-        ],
-        [
-            InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")
+            InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_edit"),
+            InlineKeyboardButton(text="🏠 В меню", callback_data="main_menu")
         ]
     ])
     return keyboard

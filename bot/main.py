@@ -24,23 +24,19 @@ async def main():
     if not bot_token:
         raise ValueError("TELEGRAM_BOT_TOKEN не найден в переменных окружения")
 
-    gemini_api_key = os.getenv("GEMINI_API_KEY")
-    deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
-
-    if not gemini_api_key and not deepseek_api_key:
-        raise ValueError("Необходимо указать хотя бы один API ключ (GEMINI_API_KEY или DEEPSEEK_API_KEY)")
+    openrouter_key = os.getenv("OPENROUTER_API_KEY")
+    if not openrouter_key:
+        raise ValueError("OPENROUTER_API_KEY не найден в переменных окружения")
 
     bot = Bot(token=bot_token)
     dp = Dispatcher(storage=MemoryStorage())
 
-    db_manager = SQLiteManager()
+    db_path = os.getenv("DB_PATH", "bot.db")
+    db_manager = SQLiteManager(db_path=db_path)
     await db_manager.init_db()
 
     llm_service = LLMService()
-    llm_service.initialize(
-        gemini_api_key=gemini_api_key,
-        deepseek_api_key=deepseek_api_key
-    )
+    llm_service.initialize(openrouter_api_key=openrouter_key)
 
     async def inject_dependencies(handler, event, data):
         data["db_manager"] = db_manager
