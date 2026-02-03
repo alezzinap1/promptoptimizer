@@ -14,6 +14,7 @@ from bot.handlers.keyboards import (
     get_result_nav_keyboard,
     get_agent_result_keyboard,
     get_agent_question_single_keyboard,
+    get_llm_error_keyboard,
     get_preference_style_keyboard,
     get_preference_goal_keyboard,
     get_preference_format_keyboard,
@@ -234,6 +235,17 @@ def _why_better_line(original: str, new_prompt: str, rouge_r1: float | None) -> 
     return "💡 Почему может быть лучше: " + ", ".join(reasons) + "."
 
 
+def _is_llm_provider_error(exc: Exception) -> bool:
+    """Проверяет, связана ли ошибка с недоступностью провайдера (403, регион и т.п.)."""
+    name = type(exc).__name__
+    msg = str(exc).lower()
+    if name in ("PermissionDeniedError", "AuthenticationError"):
+        return True
+    if "403" in msg or "not available" in msg or "your region" in msg or "provider returned error" in msg:
+        return True
+    return False
+
+
 def _format_preferences_for_prompt(user: dict) -> str:
     style = user.get("preference_style")
     goal = user.get("preference_goal")
@@ -399,7 +411,7 @@ async def handle_prompt(
     provider = user["llm_provider"] or "gemini"
 
     if mode == "agent":
-        if state.get_state() == AgentStates.answering_questions:
+        if await state.get_state() == AgentStates.answering_questions.state:
             await state.clear()
         processing_msg = await message.answer("🔄 Думаю...")
         try:
@@ -492,9 +504,20 @@ async def handle_prompt(
         except Exception as e:
             error_code = type(e).__name__
             logger.error(f"Ошибка в режиме агента: {e}", exc_info=True)
-            await processing_msg.edit_text(
-                f"❌ Ошибка.\nКод: {error_code}\nПопробуйте позже."
-            )
+            if _is_llm_provider_error(e):
+                from bot.handlers.callbacks import PROVIDER_NAMES
+                pname = PROVIDER_NAMES.get(provider, provider)
+                await processing_msg.edit_text(
+                    f"❌ Сейчас не удаётся обратиться к модели <b>{pname}</b>.\n\n"
+                    f"Часто это из‑за ограничений по региону или временной недоступности провайдера. "
+                    f"Переключитесь на другую модель в настройках или нажмите кнопку ниже.",
+                    parse_mode="HTML",
+                    reply_markup=get_llm_error_keyboard()
+                )
+            else:
+                await processing_msg.edit_text(
+                    f"❌ Ошибка.\nКод: {error_code}\nПопробуйте позже."
+                )
         return
 
     processing_msg = await message.answer("🔄 Обрабатываю промпт...")
@@ -545,9 +568,20 @@ async def handle_prompt(
     except Exception as e:
         error_code = type(e).__name__
         logger.error(f"Ошибка при обработке промпта: {e}", exc_info=True)
-        await processing_msg.edit_text(
-            f"❌ Произошла ошибка при обработке промпта.\n\n"
-            f"Код ошибки: {error_code}\n"
-            f"Попробуйте повторить запрос позже."
-        )
+        if _is_llm_provider_error(e):
+            from bot.handlers.callbacks import PROVIDER_NAMES
+            pname = PROVIDER_NAMES.get(provider or "gemini", provider or "gemini")
+            await processing_msg.edit_text(
+                f"❌ Сейчас не удаётся обратиться к модели <b>{pname}</b>.\n\n"
+                f"Часто это из‑за ограничений по региону или временной недоступности провайдера. "
+                f"Переключитесь на другую модель в настройках или нажмите кнопку ниже.",
+                parse_mode="HTML",
+                reply_markup=get_llm_error_keyboard()
+            )
+        else:
+            await processing_msg.edit_text(
+                f"❌ Произошла ошибка при обработке промпта.\n\n"
+                f"Код ошибки: {error_code}\n"
+                f"Попробуйте повторить запрос позже."
+            )
 

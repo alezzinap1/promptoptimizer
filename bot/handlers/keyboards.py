@@ -90,6 +90,15 @@ def get_mode_keyboard(current_mode: str) -> InlineKeyboardMarkup:
     return keyboard
 
 
+def get_llm_error_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура под сообщением об ошибке LLM: переключиться на стабильную модель (Gemini)."""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Переключиться на Gemini (доступен в РФ)", callback_data="llm_gemini")],
+        [InlineKeyboardButton(text="⚙️ Настройки", callback_data="nav_settings")],
+    ])
+    return keyboard
+
+
 def get_result_nav_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура под результатом: переход отправляет новое сообщение, результат остаётся в истории."""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[

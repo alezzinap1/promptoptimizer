@@ -41,14 +41,10 @@ python -m bot.main
 
 Docker (Linux-сервер):
 ```bash
-# Соберите образ и запустите с .env в текущей папке
-docker compose up -d --build
-
-# Или без docker-compose: передайте переменные вручную
 docker build -t prompt-optimizer-bot .
-docker run -d --restart unless-stopped --env-file .env -v prompt_bot_data:/app prompt-optimizer-bot
+docker run -d --restart unless-stopped --env-file .env -e DB_PATH=/app/data/bot.db -v prompt_bot_data:/app/data prompt-optimizer-bot
 ```
-База SQLite сохраняется в volume `bot_data` (путь в контейнере: `/app/data/bot.db`). Создайте `.env` по образцу `env_example.txt` с `TELEGRAM_BOT_TOKEN` и `OPENROUTER_API_KEY`.
+Создайте `.env` по образцу `env_example.txt` с `TELEGRAM_BOT_TOKEN` и `OPENROUTER_API_KEY`. База SQLite сохраняется в volume `prompt_bot_data` (в контейнере: `/app/data/bot.db`).
 
 ## Использование
 

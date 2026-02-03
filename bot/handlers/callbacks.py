@@ -404,15 +404,18 @@ async def callback_main_menu(callback: CallbackQuery, db_manager: SQLiteManager)
     provider_name = PROVIDER_NAMES.get(user["llm_provider"], user["llm_provider"])
     mode_name = MODE_NAMES.get(user.get("mode", "simple"), "простой")
 
-    await callback.message.edit_text(
-        "👋 <b>Главное меню</b>\n\n"
-        f"• LLM: {provider_name} | Режим: {mode_name}\n\n"
-        f"📝 Отправьте промпт для оптимизации\n"
-        f"⚙️ /settings — настройки\n"
-        f"📖 /help — справка",
-        parse_mode="HTML",
-        reply_markup=get_settings_keyboard()
-    )
+    try:
+        await callback.message.edit_text(
+            "👋 <b>Главное меню</b>\n\n"
+            f"• LLM: {provider_name} | Режим: {mode_name}\n\n"
+            f"📝 Отправьте промпт для оптимизации\n"
+            f"⚙️ /settings — настройки\n"
+            f"📖 /help — справка",
+            parse_mode="HTML",
+            reply_markup=get_settings_keyboard()
+        )
+    except Exception:
+        pass
     await callback.answer("Главное меню")
 
 

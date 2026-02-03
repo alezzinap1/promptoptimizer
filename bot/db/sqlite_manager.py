@@ -1,6 +1,7 @@
 import aiosqlite
 from typing import Optional, Dict, Any, List
 import logging
+import sqlite3
 
 logger = logging.getLogger(__name__)
 
@@ -101,12 +102,17 @@ class SQLiteManager:
     ) -> Dict[str, Any]:
         user = await self.get_user(user_id)
         if user is None:
-            await self.create_user(
-                user_id,
-                default_meta_prompt,
-                default_context_prompt
-            )
+            try:
+                await self.create_user(
+                    user_id,
+                    default_meta_prompt,
+                    default_context_prompt
+                )
+            except sqlite3.IntegrityError:
+                pass
             user = await self.get_user(user_id)
+        if user is None:
+            raise RuntimeError("get_or_create_user: user still None after create")
         if "mode" not in user:
             user["mode"] = "simple"
         return user
