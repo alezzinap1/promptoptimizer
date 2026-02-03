@@ -3,8 +3,11 @@ from aiogram.types import Message
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.exceptions import TelegramBadRequest
 import logging
 import re
+
+TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 
 from bot.db.sqlite_manager import SQLiteManager
 from bot.services.llm_client import LLMService
@@ -233,6 +236,27 @@ def _why_better_line(original: str, new_prompt: str, rouge_r1: float | None) -> 
     if not reasons:
         reasons.append("переформулирован под лучшую работу с LLM")
     return "💡 Почему может быть лучше: " + ", ".join(reasons) + "."
+
+
+async def _send_long_message(message: Message, text: str, parse_mode: str | None = None, reply_markup=None):
+    """Отправляет текст одним или несколькими сообщениями, не превышая лимит Telegram."""
+    if not text:
+        return
+    chunk_size = TELEGRAM_MAX_MESSAGE_LENGTH - 100
+    if len(text) <= TELEGRAM_MAX_MESSAGE_LENGTH:
+        await message.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
+        return
+    offset = 0
+    parts = []
+    while offset < len(text):
+        chunk = text[offset : offset + chunk_size]
+        if offset + chunk_size < len(text):
+            chunk += "\n\n… (продолжение ниже)"
+        parts.append(chunk)
+        offset += chunk_size
+    for i, part in enumerate(parts):
+        mk = reply_markup if i == len(parts) - 1 else None
+        await message.answer(part, parse_mode=parse_mode, reply_markup=mk)
 
 
 def _is_llm_provider_error(exc: Exception) -> bool:
@@ -491,33 +515,39 @@ async def handle_prompt(
                         extra.append(why_line)
                     if extra:
                         formatted += "\n\n" + "\n".join(extra)
-                if len(formatted) <= 4096:
-                    await message.answer(
-                        formatted,
-                        parse_mode="HTML",
-                        reply_markup=get_agent_result_keyboard()
-                    )
-                else:
-                    await message.answer(reply, reply_markup=get_agent_result_keyboard())
+                await _send_long_message(
+                    message,
+                    formatted,
+                    parse_mode="HTML",
+                    reply_markup=get_agent_result_keyboard()
+                )
             except Exception:
-                await message.answer(reply, reply_markup=get_agent_result_keyboard())
+                await _send_long_message(
+                    message,
+                    reply[:TELEGRAM_MAX_MESSAGE_LENGTH - 50] + "\n\n… (сообщение обрезано)" if len(reply) > TELEGRAM_MAX_MESSAGE_LENGTH else reply,
+                    reply_markup=get_agent_result_keyboard()
+                )
         except Exception as e:
             error_code = type(e).__name__
             logger.error(f"Ошибка в режиме агента: {e}", exc_info=True)
+            err_text_llm = (
+                "❌ Сейчас не удаётся обратиться к модели <b>{pname}</b>.\n\n"
+                "Часто это из‑за ограничений по региону или временной недоступности провайдера. "
+                "Переключитесь на другую модель в настройках или нажмите кнопку ниже."
+            )
+            err_text_other = f"❌ Ошибка.\nКод: {error_code}\nПопробуйте позже."
             if _is_llm_provider_error(e):
                 from bot.handlers.callbacks import PROVIDER_NAMES
                 pname = PROVIDER_NAMES.get(provider, provider)
-                await processing_msg.edit_text(
-                    f"❌ Сейчас не удаётся обратиться к модели <b>{pname}</b>.\n\n"
-                    f"Часто это из‑за ограничений по региону или временной недоступности провайдера. "
-                    f"Переключитесь на другую модель в настройках или нажмите кнопку ниже.",
-                    parse_mode="HTML",
-                    reply_markup=get_llm_error_keyboard()
-                )
+                text = err_text_llm.format(pname=pname)
+                markup = get_llm_error_keyboard()
             else:
-                await processing_msg.edit_text(
-                    f"❌ Ошибка.\nКод: {error_code}\nПопробуйте позже."
-                )
+                text = err_text_other
+                markup = None
+            try:
+                await processing_msg.edit_text(text, parse_mode="HTML" if markup else None, reply_markup=markup)
+            except (TelegramBadRequest, Exception):
+                await message.answer(text, parse_mode="HTML" if markup else None, reply_markup=markup)
         return
 
     processing_msg = await message.answer("🔄 Обрабатываю промпт...")
@@ -561,27 +591,32 @@ async def handle_prompt(
             await message.answer(metrics, reply_markup=get_result_nav_keyboard())
 
     except ValueError as e:
-        await processing_msg.edit_text(
-            f"❌ Ошибка: {str(e)}\n\n"
-            f"Проверьте настройки в /settings"
-        )
+        text = f"❌ Ошибка: {str(e)}\n\nПроверьте настройки в /settings"
+        try:
+            await processing_msg.edit_text(text)
+        except (TelegramBadRequest, Exception):
+            await message.answer(text)
     except Exception as e:
         error_code = type(e).__name__
         logger.error(f"Ошибка при обработке промпта: {e}", exc_info=True)
         if _is_llm_provider_error(e):
             from bot.handlers.callbacks import PROVIDER_NAMES
             pname = PROVIDER_NAMES.get(provider or "gemini", provider or "gemini")
-            await processing_msg.edit_text(
+            text = (
                 f"❌ Сейчас не удаётся обратиться к модели <b>{pname}</b>.\n\n"
                 f"Часто это из‑за ограничений по региону или временной недоступности провайдера. "
-                f"Переключитесь на другую модель в настройках или нажмите кнопку ниже.",
-                parse_mode="HTML",
-                reply_markup=get_llm_error_keyboard()
+                f"Переключитесь на другую модель в настройках или нажмите кнопку ниже."
             )
+            markup = get_llm_error_keyboard()
         else:
-            await processing_msg.edit_text(
+            text = (
                 f"❌ Произошла ошибка при обработке промпта.\n\n"
                 f"Код ошибки: {error_code}\n"
                 f"Попробуйте повторить запрос позже."
             )
+            markup = None
+        try:
+            await processing_msg.edit_text(text, parse_mode="HTML" if markup else None, reply_markup=markup)
+        except (TelegramBadRequest, Exception):
+            await message.answer(text, parse_mode="HTML" if markup else None, reply_markup=markup)
 
