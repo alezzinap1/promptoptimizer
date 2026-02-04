@@ -57,6 +57,12 @@ AGENT_SYSTEM_PROMPT_BASE = """Ты — помощник по созданию и
 
 Шаг 2 — Реши, нужны ли вопросы: если пользователь уже подробно описал задачу, формат и стиль — не задавай вопросов, сразу верни [PROMPT]. Вопросы задавай только когда реально не хватает данных для точного промпта.
 
+Отдельный сценарий: если в запросе явно дан текущий промпт и далее текст с уточнениями/правками к нему, это НЕ новый промпт, а правка существующего. В таком случае:
+• учитывай исходную цель и предыдущий вариант промпта;
+• обнови формулировки с учётом новых уточнений;
+• по возможности сохраняй структуру и формат прошлого варианта;
+• не игнорируй предыдущий промпт и не генерируй промпт “с нуля”.
+
 Шаг 3 — Формат ответа (обязательно один из двух):
 
 1) Готовый промпт — разметка [PROMPT] и [/PROMPT] (каждый тег на отдельной строке). До [PROMPT] — краткий комментарий, после [/PROMPT] — уточнения если нужно.
@@ -152,6 +158,16 @@ def _parse_agent_reply(reply: str) -> tuple[str, str, str]:
             outro = (parts[2] if len(parts) > 2 else "").strip()
             return intro, prompt_block, outro
     return reply.strip(), "", ""
+
+
+def _get_previous_agent_prompt(history: list[dict]) -> str:
+    """Возвращает последний промпт агента (блок между [PROMPT]...[/PROMPT]) из истории или пустую строку."""
+    for msg in reversed(history):
+        if msg.get("role") == "assistant" and msg.get("content"):
+            _, prev_block, _ = _parse_agent_reply(msg["content"])
+            if prev_block and prev_block.strip():
+                return prev_block.strip()
+    return ""
 
 
 def _format_agent_reply_for_telegram(reply: str) -> str:
@@ -432,7 +448,7 @@ async def handle_prompt(
         DEFAULT_CONTEXT
     )
     mode = user.get("mode", "simple")
-    provider = user["llm_provider"] or "gemini"
+    provider = user["llm_provider"] or "trinity"
 
     if mode == "agent":
         if await state.get_state() == AgentStates.answering_questions.state:
@@ -444,7 +460,20 @@ async def handle_prompt(
             system_prompt = (prefs_text + "\n\n" + AGENT_SYSTEM_PROMPT_BASE) if prefs_text else AGENT_SYSTEM_PROMPT_BASE
             focus_parts = [msg["content"][:200].strip() for msg in history if msg.get("role") == "user"][-2:]
             focus_str = "Ранее пользователь писал: " + " | ".join(focus_parts) if focus_parts else ""
-            user_content = (focus_str + "\n\nТекущий запрос: " + user_prompt) if focus_str else user_prompt
+            previous_agent_prompt = _get_previous_agent_prompt(history)
+            if previous_agent_prompt:
+                # Пользователь уточняет или правит уже сгенерированный ранее промпт
+                user_content = (
+                    "Вот текущий вариант промпта, который нужно улучшать и уточнять:\n"
+                    f"{previous_agent_prompt}\n\n"
+                    "Пользователь написал уточнения/правки ИМЕННО к этому промпту (это не новый независимый запрос):\n"
+                    f"{user_prompt}\n\n"
+                )
+                if focus_str:
+                    user_content += focus_str
+            else:
+                # Первый запрос или история была очищена — работаем как с новым промптом
+                user_content = (focus_str + "\n\nТекущий запрос: " + user_prompt) if focus_str else user_prompt
             temperature = float(user.get("temperature", 0.4))
             reply = await llm_service.chat_with_history(
                 user_content=user_content,
@@ -485,19 +514,13 @@ async def handle_prompt(
                 formatted = _format_agent_reply_for_telegram(reply)
                 _, prompt_block, _ = _parse_agent_reply(reply)
                 if prompt_block.strip():
-                    previous_agent_prompt = ""
-                    for msg in reversed(history):
-                        if msg.get("role") == "assistant" and msg.get("content"):
-                            _, prev_block, _ = _parse_agent_reply(msg["content"])
-                            if prev_block.strip():
-                                previous_agent_prompt = prev_block
-                                break
-                    baseline = previous_agent_prompt if previous_agent_prompt.strip() else user_prompt
+                    previous_agent_prompt = _get_previous_agent_prompt(history)
+                    baseline = previous_agent_prompt if previous_agent_prompt else user_prompt
                     extra = []
                     metrics_line = _agent_metrics_line(baseline, prompt_block)
                     if metrics_line:
                         extra.append(metrics_line)
-                    if previous_agent_prompt.strip():
+                    if previous_agent_prompt:
                         rouge_prev = _rouge_line("Предыдущий вариант → подправленный", previous_agent_prompt, prompt_block)
                         if rouge_prev:
                             extra.append(rouge_prev)
@@ -564,7 +587,7 @@ async def handle_prompt(
             user_prompt,
             meta_prompt,
             context_prompt,
-            provider or "gemini",
+            provider or "trinity",
             temperature=temperature,
         )
 

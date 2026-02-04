@@ -48,7 +48,18 @@ def get_temperature_keyboard(current: float) -> InlineKeyboardMarkup:
 
 
 def get_llm_keyboard(current_provider: str) -> InlineKeyboardMarkup:
-    providers = ("deepseek", "openai", "gemini", "grok", "nemo", "mimo")
+    providers = (
+        "deepseek",
+        "openai",
+        "gemini",
+        "grok",
+        "nemo",
+        "mimo",
+        "trinity",
+        "gpt5nano",
+        "deepseek_r1t",
+        "qwen3",
+    )
     labels = {
         "deepseek": "DeepSeek",
         "openai": "ChatGPT",
@@ -56,6 +67,10 @@ def get_llm_keyboard(current_provider: str) -> InlineKeyboardMarkup:
         "grok": "Grok 4 Fast (xAI)",
         "nemo": "Mistral Nemo",
         "mimo": "Xiaomi Mimo V2 Flash",
+        "trinity": "Trinity Large (free)",
+        "gpt5nano": "GPT-5 Nano",
+        "deepseek_r1t": "DeepSeek R1T Chimera (free)",
+        "qwen3": "Qwen3 235B",
     }
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [

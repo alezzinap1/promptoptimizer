@@ -17,7 +17,7 @@ class SQLiteManager:
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     user_id INTEGER PRIMARY KEY,
-                    llm_provider TEXT DEFAULT 'gemini',
+                    llm_provider TEXT DEFAULT 'trinity',
                     meta_prompt TEXT,
                     context_prompt TEXT,
                     ab_testing_enabled INTEGER DEFAULT 0,
@@ -75,7 +75,7 @@ class SQLiteManager:
         user_id: int,
         meta_prompt: str,
         context_prompt: str,
-        llm_provider: str = "gemini",
+        llm_provider: str = "trinity",
     ):
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("""

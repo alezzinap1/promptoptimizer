@@ -36,6 +36,8 @@ from bot.handlers.commands import (
     _rouge_scores,
     _why_better_line,
     _html_escape,
+    _send_long_message,
+    _is_llm_provider_error,
 )
 
 PROVIDER_NAMES = {
@@ -45,6 +47,10 @@ PROVIDER_NAMES = {
     "grok": "Grok 4 Fast (xAI)",
     "nemo": "Mistral Nemo",
     "mimo": "Xiaomi Mimo V2 Flash",
+    "trinity": "Trinity Large (free)",
+    "gpt5nano": "GPT-5 Nano",
+    "deepseek_r1t": "DeepSeek R1T Chimera (free)",
+    "qwen3": "Qwen3 235B",
 }
 MODE_NAMES = {"simple": "простой", "agent": "агент"}
 
@@ -344,11 +350,12 @@ async def callback_settings_context(callback: CallbackQuery, state: FSMContext, 
 
 
 @router.callback_query(F.data == "nav_main")
-async def callback_nav_main(callback: CallbackQuery, db_manager: SQLiteManager):
+async def callback_nav_main(callback: CallbackQuery, state: FSMContext, db_manager: SQLiteManager):
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
+    await state.clear()
     user_id = callback.from_user.id
     user = await db_manager.get_or_create_user(
         user_id,
@@ -393,7 +400,8 @@ async def callback_nav_settings(callback: CallbackQuery, db_manager: SQLiteManag
 
 
 @router.callback_query(F.data == "main_menu")
-async def callback_main_menu(callback: CallbackQuery, db_manager: SQLiteManager):
+async def callback_main_menu(callback: CallbackQuery, state: FSMContext, db_manager: SQLiteManager):
+    await state.clear()
     user_id = callback.from_user.id
     user = await db_manager.get_or_create_user(
         user_id,
@@ -451,6 +459,7 @@ async def callback_agent_question_answer(
 ):
     raw = callback.data
     if raw == "aq_done":
+        await callback.answer("Формирую итоговый промпт…")
         data = await state.get_data()
         original_request = data.get("agent_original_request") or ""
         questions = data.get("agent_questions") or []
@@ -508,23 +517,32 @@ async def callback_agent_question_answer(
                     extra.append(why_line)
                 if extra:
                     formatted += "\n\n" + "\n".join(extra)
-            if len(formatted) <= 4096:
+            text_to_send = formatted if formatted.strip() else reply
+            parse_mode = "HTML" if formatted.strip() else None
+            await _send_long_message(
+                callback.message,
+                text_to_send,
+                parse_mode=parse_mode,
+                reply_markup=get_agent_result_keyboard(),
+            )
+        except Exception as e:
+            logger.exception("Ошибка при формировании промпта из ответов: %s", e)
+            if _is_llm_provider_error(e):
+                pname = PROVIDER_NAMES.get(provider, provider)
+                text = (
+                    f"❌ Сейчас не удаётся обратиться к модели <b>{pname}</b>.\n\n"
+                    "Часто это из‑за ограничений по региону или временной недоступности провайдера. "
+                    "Переключитесь на другую модель в настройках или нажмите кнопку ниже."
+                )
                 await callback.message.answer(
-                    formatted,
+                    text,
                     parse_mode="HTML",
-                    reply_markup=get_agent_result_keyboard()
+                    reply_markup=get_llm_error_keyboard(),
                 )
             else:
                 await callback.message.answer(
-                    reply,
-                    reply_markup=get_agent_result_keyboard()
+                    "❌ Не удалось сформировать промпт. Попробуйте ещё раз или отправьте новый запрос."
                 )
-        except Exception as e:
-            logger.exception("Ошибка при формировании промпта из ответов: %s", e)
-            await callback.message.answer(
-                "❌ Не удалось сформировать промпт. Попробуйте ещё раз или отправьте новый запрос."
-            )
-        await callback.answer("Готово")
         return
     parts = raw.split("_")
     if len(parts) != 3 or parts[0] != "aq":

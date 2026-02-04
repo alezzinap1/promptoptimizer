@@ -12,6 +12,10 @@ OPENROUTER_MODELS = {
     "grok": "x-ai/grok-4-fast",
     "nemo": "mistralai/mistral-nemo",
     "mimo": "xiaomi/mimo-v2-flash",
+    "trinity": "arcee-ai/trinity-large-preview:free",
+    "gpt5nano": "openai/gpt-5-nano",
+    "deepseek_r1t": "tngtech/deepseek-r1t-chimera:free",
+    "qwen3": "qwen/qwen3-235b-a22b-2507",
 }
 
 
@@ -26,14 +30,14 @@ class LLMService:
         )
 
     def _get_model_id(self, provider: str) -> str:
-        return OPENROUTER_MODELS.get(provider) or OPENROUTER_MODELS["gemini"]
+        return OPENROUTER_MODELS.get(provider) or OPENROUTER_MODELS["trinity"]
 
     async def optimize_prompt(
         self,
         user_prompt: str,
         meta_prompt: str,
         context_prompt: Optional[str] = None,
-        provider: str = "gemini",
+        provider: str = "trinity",
         temperature: float = 0.4,
     ) -> str:
         if not self.client:
@@ -62,7 +66,7 @@ class LLMService:
         user_content: str,
         history: List[Dict[str, str]],
         system_prompt: str,
-        provider: str = "gemini",
+        provider: str = "trinity",
         temperature: float = 0.4,
     ) -> str:
         if not self.client:
