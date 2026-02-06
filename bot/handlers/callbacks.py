@@ -10,6 +10,7 @@ from bot.handlers.keyboards import (
     get_customization_keyboard,
     get_temperature_keyboard,
     get_llm_keyboard,
+    get_llm_error_keyboard,
     get_back_keyboard,
     get_cancel_edit_keyboard,
     get_mode_keyboard,
@@ -31,13 +32,18 @@ from bot.handlers.commands import (
     AGENT_SYSTEM_PROMPT_BASE,
     _format_agent_reply_for_telegram,
     _parse_agent_reply,
+    _parse_agent_questions,
+    _get_previous_agent_prompt,
     _agent_metrics_line,
     _rouge_line,
     _rouge_scores,
     _why_better_line,
     _html_escape,
     _send_long_message,
+    _send_agent_reply_safe,
     _is_llm_provider_error,
+    QUESTIONS_OPEN,
+    _format_preferences_for_prompt,
 )
 
 PROVIDER_NAMES = {
@@ -118,8 +124,11 @@ async def callback_settings_temperature(callback: CallbackQuery, db_manager: SQL
     temp = float(user.get("temperature", 0.4))
     await callback.message.edit_text(
         "🌡 Температура влияет на ответы модели:\n\n"
-        "• Ниже (0.3–0.4) — стабильнее и предсказуемее, лучше держит формат [PROMPT]/[QUESTIONS].\n"
-        "• Выше (0.6–0.7) — разнообразнее, но может чаще отклоняться от формата.\n\n"
+        "• Очень низкая (0.1) — максимально стабильные и предсказуемые ответы, почти без креативности.\n"
+        "• Низкая (0.3–0.4) — стабильнее и предсказуемее, лучше держит формат [PROMPT]/[QUESTIONS].\n"
+        "• Средняя (0.5) — баланс между стабильностью и разнообразием.\n"
+        "• Высокая (0.6–0.7) — больше креативных формулировок, иногда отклоняется от формата.\n"
+        "• Очень высокая (0.9) — максимум разнообразия, возможны сильные отклонения от формата и стиля.\n\n"
         f"Текущая: {temp}",
         reply_markup=get_temperature_keyboard(temp)
     )
@@ -133,7 +142,8 @@ async def callback_temp_set(callback: CallbackQuery, db_manager: SQLiteManager):
     except ValueError:
         await callback.answer()
         return
-    if val not in (0.3, 0.4, 0.5, 0.6, 0.7):
+    # Разрешённые значения температуры (в том числе 0.1 и 0.9)
+    if val not in (0.1, 0.3, 0.4, 0.5, 0.6, 0.7, 0.9):
         await callback.answer()
         return
     user_id = callback.from_user.id
@@ -468,12 +478,20 @@ async def callback_agent_question_answer(
         prefs = data.get("agent_prefs") or ""
         lines = []
         for q_idx, q in enumerate(questions):
-            opt_idx = answers.get(q_idx)
+            selected = answers.get(q_idx)
             opts = q.get("options") or []
-            if opt_idx is None or not (0 <= opt_idx < len(opts)):
+            # Поддержка как старого формата (один индекс), так и нового (список индексов)
+            if isinstance(selected, list):
+                indices = [i for i in selected if isinstance(i, int) and 0 <= i < len(opts)]
+            elif isinstance(selected, int):
+                indices = [selected] if 0 <= selected < len(opts) else []
+            else:
+                indices = []
+            if not indices:
                 opt_text = "не указано"
             else:
-                opt_text = opts[opt_idx]
+                chosen = [opts[i] for i in indices]
+                opt_text = ", ".join(chosen)
             lines.append(f"{q_idx + 1}. {q.get('question', '')}: {opt_text}")
         answers_text = "\n".join(lines)
         system_prompt = (prefs + "\n\n" + AGENT_SYSTEM_PROMPT_BASE) if prefs else AGENT_SYSTEM_PROMPT_BASE
@@ -500,10 +518,9 @@ async def callback_agent_question_answer(
             user_msg_for_history = original_request + "\n\nОтветы на вопросы:\n" + answers_text
             await db_manager.add_agent_message(user_id, "user", user_msg_for_history)
             await db_manager.add_agent_message(user_id, "assistant", reply)
-            _, prompt_block, _ = _parse_agent_reply(reply)
-            formatted = _format_agent_reply_for_telegram(reply)
+            intro, prompt_block, outro = _parse_agent_reply(reply)
+            extra = []
             if prompt_block.strip():
-                extra = []
                 metrics_line = _agent_metrics_line(original_request, prompt_block)
                 if metrics_line:
                     extra.append(metrics_line)
@@ -515,18 +532,87 @@ async def callback_agent_question_answer(
                 why_line = _why_better_line(original_request, prompt_block, rouge_r1)
                 if why_line:
                     extra.append(why_line)
-                if extra:
-                    formatted += "\n\n" + "\n".join(extra)
-            text_to_send = formatted if formatted.strip() else reply
-            parse_mode = "HTML" if formatted.strip() else None
-            await _send_long_message(
+            await _send_agent_reply_safe(
                 callback.message,
-                text_to_send,
-                parse_mode=parse_mode,
+                intro=intro or "",
+                prompt_block=prompt_block or "",
+                outro=outro or "",
+                extra_lines=extra,
                 reply_markup=get_agent_result_keyboard(),
             )
         except Exception as e:
             logger.exception("Ошибка при формировании промпта из ответов: %s", e)
+            if _is_llm_provider_error(e):
+                pname = PROVIDER_NAMES.get(provider, provider)
+                text = (
+                    f"❌ Сейчас не удаётся обратиться к модели <b>{pname}</b>.\n\n"
+                    "Часто это из‑за ограничений по региону или временной недоступности провайдера. "
+                    "Переключитесь на другую модель в настройках или нажмите кнопку ниже."
+                )
+                await callback.message.answer(
+                    text,
+                    parse_mode="HTML",
+                    reply_markup=get_llm_error_keyboard(),
+                )
+            else:
+                await callback.message.answer(
+                    "❌ Не удалось сформировать промпт. Попробуйте ещё раз или отправьте новый запрос."
+                )
+        return
+    if raw == "aq_skip":
+        # Пользователь просит сразу сформировать промпт без дальнейших вопросов.
+        data = await state.get_data()
+        original_request = data.get("agent_original_request") or ""
+        provider = data.get("agent_provider") or "gemini"
+        prefs = data.get("agent_prefs") or ""
+        system_prompt = (prefs + "\n\n" + AGENT_SYSTEM_PROMPT_BASE) if prefs else AGENT_SYSTEM_PROMPT_BASE
+        user_content = (
+            "Пользователь хочет получить итоговый промпт СРАЗУ, без дополнительных уточняющих вопросов.\n"
+            "Сформируй промпт только на основе этого запроса, не добавляя новых деталей:\n\n"
+            f"{original_request}\n\n"
+            "Верни промпт в [PROMPT] и [/PROMPT] (каждый тег на отдельной строке). Только промпт, без лишнего текста после [/PROMPT]."
+        )
+        await callback.message.edit_text("🔄 Формирую промпт без дополнительных вопросов...")
+        await state.clear()
+        user_id = callback.from_user.id
+        user = await db_manager.get_or_create_user(
+            user_id, DEFAULT_META_PROMPT, DEFAULT_CONTEXT
+        )
+        temperature = float(user.get("temperature", 0.4))
+        try:
+            reply = await llm_service.chat_with_history(
+                user_content=user_content,
+                history=[],
+                system_prompt=system_prompt,
+                provider=provider,
+                temperature=temperature,
+            )
+            await db_manager.add_agent_message(user_id, "user", original_request)
+            await db_manager.add_agent_message(user_id, "assistant", reply)
+            intro, prompt_block, outro = _parse_agent_reply(reply)
+            extra = []
+            if prompt_block.strip():
+                metrics_line = _agent_metrics_line(original_request, prompt_block)
+                if metrics_line:
+                    extra.append(metrics_line)
+                rouge_orig = _rouge_line("Похожесть на исходный запрос", original_request, prompt_block)
+                if rouge_orig:
+                    extra.append(rouge_orig)
+                scores = _rouge_scores(original_request, prompt_block)
+                rouge_r1 = scores[0] if scores else None
+                why_line = _why_better_line(original_request, prompt_block, rouge_r1)
+                if why_line:
+                    extra.append(why_line)
+            await _send_agent_reply_safe(
+                callback.message,
+                intro=intro or "",
+                prompt_block=prompt_block or "",
+                outro=outro or "",
+                extra_lines=extra,
+                reply_markup=get_agent_result_keyboard(),
+            )
+        except Exception as e:
+            logger.exception("Ошибка при формировании промпта без вопросов: %s", e)
             if _is_llm_provider_error(e):
                 pname = PROVIDER_NAMES.get(provider, provider)
                 text = (
@@ -560,7 +646,22 @@ async def callback_agent_question_answer(
     if q_idx < 0 or q_idx >= len(questions):
         await callback.answer()
         return
-    answers[q_idx] = opt_idx
+
+    # Множественный выбор: при повторном нажатии по тому же варианту — снимаем выбор.
+    current = answers.get(q_idx)
+    if isinstance(current, list):
+        selected = list(current)
+    elif isinstance(current, int):
+        selected = [current]
+    else:
+        selected = []
+
+    if opt_idx in selected:
+        selected.remove(opt_idx)
+    else:
+        selected.append(opt_idx)
+
+    answers[q_idx] = selected
     await state.update_data(agent_answers=answers)
     try:
         q = questions[q_idx]
@@ -582,6 +683,150 @@ async def callback_agent_accept_prompt(callback: CallbackQuery, db_manager: SQLi
     except Exception:
         pass
     await callback.answer("Промпт принят. Следующее сообщение — новый диалог.")
+
+
+@router.callback_query(F.data == "agent_continue")
+async def callback_agent_continue(
+    callback: CallbackQuery,
+    db_manager: SQLiteManager,
+    llm_service,
+    state: FSMContext,
+):
+    """При нажатии 'Уточнить ещё' агент анализирует текущий промпт и задаёт уточняющие вопросы."""
+    user_id = callback.from_user.id
+    user = await db_manager.get_or_create_user(
+        user_id, DEFAULT_META_PROMPT, DEFAULT_CONTEXT
+    )
+    
+    # Убираем клавиатуру под сообщением
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    
+    await callback.answer("Анализирую промпт и готовлю уточняющие вопросы...")
+    
+    # Получаем историю и последний промпт
+    history = await db_manager.get_agent_history(user_id)
+    previous_agent_prompt = _get_previous_agent_prompt(history)
+    
+    if not previous_agent_prompt:
+        await callback.message.answer(
+            "❌ Не найден текущий промпт для уточнения.\n\n"
+            "Просто напиши свой запрос или уточнение, и я помогу."
+        )
+        return
+    
+    # Формируем запрос агенту: проанализировать промпт и задать уточняющие вопросы
+    prefs_text = _format_preferences_for_prompt(user)
+    system_prompt = (prefs_text + "\n\n" + AGENT_SYSTEM_PROMPT_BASE) if prefs_text else AGENT_SYSTEM_PROMPT_BASE
+    
+    user_content = (
+        "Пользователь хочет уточнить и улучшить этот промпт:\n\n"
+        f"{previous_agent_prompt}\n\n"
+        "Проанализируй промпт и определи, какие уточнения нужны для его улучшения. "
+        "Задай уточняющие вопросы (в формате [QUESTIONS]...[/QUESTIONS]) или, если промпт уже достаточно детален, "
+        "предложи улучшенный вариант (в формате [PROMPT]...[/PROMPT])."
+    )
+    
+    provider = user["llm_provider"] or "trinity"
+    temperature = float(user.get("temperature", 0.4))
+    
+    processing_msg = await callback.message.answer("🔄 Анализирую промпт и готовлю вопросы...")
+    
+    try:
+        reply = await llm_service.chat_with_history(
+            user_content=user_content,
+            history=history,
+            system_prompt=system_prompt,
+            provider=provider,
+            temperature=temperature,
+        )
+        
+        # Сохраняем в историю
+        await db_manager.add_agent_message(user_id, "user", "Хочу уточнить промпт")
+        await db_manager.add_agent_message(user_id, "assistant", reply)
+        
+        await processing_msg.delete()
+        
+        # Проверяем, задал ли агент вопросы
+        questions = _parse_agent_questions(reply)
+        if questions:
+            # Агент задал вопросы - показываем их
+            intro = reply.split(QUESTIONS_OPEN)[0].strip() if QUESTIONS_OPEN in reply else ""
+            await state.set_state(AgentStates.answering_questions)
+            await state.update_data(
+                agent_original_request=previous_agent_prompt,
+                agent_questions=questions,
+                agent_answers={},
+                agent_provider=provider,
+                agent_prefs=prefs_text or "",
+            )
+            answers = {}
+            for i, q in enumerate(questions):
+                text = _html_escape(q["question"])
+                if intro and i == 0:
+                    text = _html_escape(intro) + "\n\n" + text
+                await callback.message.answer(
+                    text,
+                    parse_mode="HTML",
+                    reply_markup=get_agent_question_single_keyboard(
+                        i, q, answers, i == len(questions) - 1
+                    ),
+                )
+            # Добавляем подсказку после последнего вопроса
+            await callback.message.answer(
+                "💡 Или напиши своё уточнение текстом — я обработаю его.",
+                reply_markup=None
+            )
+        else:
+            # Агент дал улучшенный промпт или комментарий
+            intro, prompt_block, outro = _parse_agent_reply(reply)
+            extra = []
+            if prompt_block.strip():
+                metrics_line = _agent_metrics_line(previous_agent_prompt, prompt_block)
+                if metrics_line:
+                    extra.append(metrics_line)
+                rouge_prev = _rouge_line("Предыдущий вариант → улучшенный", previous_agent_prompt, prompt_block)
+                if rouge_prev:
+                    extra.append(rouge_prev)
+                scores_prev = _rouge_scores(previous_agent_prompt, prompt_block)
+                rouge_r1 = scores_prev[0] if scores_prev else None
+                why_line = _why_better_line(previous_agent_prompt, prompt_block, rouge_r1)
+                if why_line:
+                    extra.append(why_line)
+            if not prompt_block.strip() and outro.strip():
+                outro = outro.strip() + "\n\n💡 Можешь написать своё уточнение текстом, и я обработаю его."
+            elif not prompt_block.strip():
+                outro = "💡 Можешь написать своё уточнение текстом, и я обработаю его."
+            await _send_agent_reply_safe(
+                callback.message,
+                intro=intro or "",
+                prompt_block=prompt_block or "",
+                outro=outro or "",
+                extra_lines=extra,
+                reply_markup=get_agent_result_keyboard(),
+            )
+    except Exception as e:
+        logger.exception("Ошибка при анализе промпта для уточнения: %s", e)
+        await processing_msg.delete()
+        if _is_llm_provider_error(e):
+            pname = PROVIDER_NAMES.get(provider, provider)
+            text = (
+                f"❌ Сейчас не удаётся обратиться к модели <b>{pname}</b>.\n\n"
+                "Часто это из‑за ограничений по региону или временной недоступности провайдера. "
+                "Переключитесь на другую модель в настройках или нажмите кнопку ниже."
+            )
+            await callback.message.answer(
+                text,
+                parse_mode="HTML",
+                reply_markup=get_llm_error_keyboard(),
+            )
+        else:
+            await callback.message.answer(
+                "❌ Не удалось проанализировать промпт. "
+                "Попробуй написать своё уточнение текстом — я обработаю его."
+            )
 
 
 @router.callback_query()

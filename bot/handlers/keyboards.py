@@ -32,7 +32,7 @@ def get_customization_keyboard() -> InlineKeyboardMarkup:
 
 
 def get_temperature_keyboard(current: float) -> InlineKeyboardMarkup:
-    options = (0.3, 0.4, 0.5, 0.6, 0.7)
+    options = (0.1, 0.3, 0.4, 0.5, 0.6, 0.7, 0.9)
     row = []
     for t in options:
         label = f"{'✅ ' if abs(current - t) < 0.01 else ''}{t}"
@@ -129,6 +129,7 @@ def get_agent_result_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура под ответом агента с промптом: принять промпт (обнулить историю) + навигация."""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Принять промпт", callback_data="agent_accept_prompt")],
+        [InlineKeyboardButton(text="💬 Уточнить ещё", callback_data="agent_continue")],
         [
             InlineKeyboardButton(text="🏠 Главное меню", callback_data="nav_main"),
             InlineKeyboardButton(text="⚙️ Настройки", callback_data="nav_settings")
@@ -144,7 +145,12 @@ def get_agent_questions_keyboard(questions: list, answers: dict) -> InlineKeyboa
         opts = q.get("options") or []
         for opt_idx, opt in enumerate(opts):
             label = (opt[:37] + "…") if len(opt) > 40 else opt
-            if answers.get(q_idx) == opt_idx:
+            selected = answers.get(q_idx)
+            if isinstance(selected, list):
+                is_selected = opt_idx in selected
+            else:
+                is_selected = selected == opt_idx
+            if is_selected:
                 label = "✅ " + label
             rows.append([InlineKeyboardButton(text=label, callback_data=f"aq_{q_idx}_{opt_idx}")])
     rows.append([InlineKeyboardButton(text="✅ Готово", callback_data="aq_done")])
@@ -159,11 +165,18 @@ def get_agent_question_single_keyboard(
     rows = []
     for opt_idx, opt in enumerate(opts):
         label = (opt[:37] + "…") if len(opt) > 40 else opt
-        if answers.get(q_idx) == opt_idx:
+        selected = answers.get(q_idx)
+        if isinstance(selected, list):
+            is_selected = opt_idx in selected
+        else:
+            is_selected = selected == opt_idx
+        if is_selected:
             label = "✅ " + label
         rows.append([InlineKeyboardButton(text=label, callback_data=f"aq_{q_idx}_{opt_idx}")])
     if is_last:
         rows.append([InlineKeyboardButton(text="✅ Готово", callback_data="aq_done")])
+    # Пользователь может в любой момент пропустить вопросы и сразу получить промпт
+    rows.append([InlineKeyboardButton(text="⚡ Сразу дать промпт (без вопросов)", callback_data="aq_skip")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

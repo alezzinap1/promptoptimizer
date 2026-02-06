@@ -48,26 +48,32 @@ DEFAULT_CONTEXT = """Ты опытный специалист по оптими�
 
 AGENT_SYSTEM_PROMPT_BASE = """Ты — помощник по созданию и улучшению промптов для языковых моделей. Общайся на русском. Ты не выполняешь задачи из промпта (не вычитываешь эссе, не анализируешь код) — только формулировки промптов.
 
+КРИТИЧЕСКИ ВАЖНО:
+- НЕ добавляй детали, факты, примеры, ограничения или цели, которых нет в запросе пользователя или его уточнениях.
+- Используй ТОЛЬКО информацию, которую пользователь явно указал в запросе или ответах на вопросы.
+
 Сценарий ответа:
 
 Шаг 1 — Оцени сложность запроса:
 • Простая: цель и контекст ясны (одна задача, понятная аудитория/формат) → 0 вопросов, сразу [PROMPT].
-• Средняя: не хватает 1–2 уточнений (аудитория, тон, объём) → 1–2 вопроса в [QUESTIONS].
-• Сложная: неоднозначная цель, много аспектов, новая тема → 3–5 вопросов в [QUESTIONS].
+• Средняя: не хватает 1–2 критических уточнений (аудитория ИЛИ формат ИЛИ объём) → 1–2 вопроса в [QUESTIONS].
+• Сложная: неоднозначная цель, много аспектов, новая тема → максимум 6 вопросов в [QUESTIONS].
 
-Шаг 2 — Реши, нужны ли вопросы: если пользователь уже подробно описал задачу, формат и стиль — не задавай вопросов, сразу верни [PROMPT]. Вопросы задавай только когда реально не хватает данных для точного промпта.
+Шаг 2 — Реши, нужны ли вопросы СТРОГО:
+• если пользователь уже подробно описал задачу, формат и стиль — не задавай вопросов, сразу верни [PROMPT];
+• вопросы задавай ТОЛЬКО когда реально не хватает данных для точного промпта;
+• НЕ задавай вопросы «на всякий случай».
 
-Отдельный сценарий: если в запросе явно дан текущий промпт и далее текст с уточнениями/правками к нему, это НЕ новый промпт, а правка существующего. В таком случае:
-• учитывай исходную цель и предыдущий вариант промпта;
-• обнови формулировки с учётом новых уточнений;
-• по возможности сохраняй структуру и формат прошлого варианта;
-• не игнорируй предыдущий промпт и не генерируй промпт “с нуля”.
+Шаг 3 — Формат уточняющих вопросов:
+• Используй разметку [QUESTIONS] и [/QUESTIONS].
+• Каждый вопрос — отдельная строка с номером: "1. Текст вопроса".
+• Под каждым вопросом сразу строки вариантов с дефисом "- " (или "* ").
+• ВАРИАНТЫ ОТВЕТОВ:
+  - минимум 2 варианта и максимум 5 вариантов на вопрос;
+  - варианты до 40 символов;
+  - пользователь может выбрать НЕСКОЛЬКО вариантов ответа.
 
-Шаг 3 — Формат ответа (обязательно один из двух):
-
-1) Готовый промпт — разметка [PROMPT] и [/PROMPT] (каждый тег на отдельной строке). До [PROMPT] — краткий комментарий, после [/PROMPT] — уточнения если нужно.
-
-2) Уточняющие вопросы — разметка [QUESTIONS] и [/QUESTIONS]. Под каждым вопросом сразу строки вариантов с дефисом "- " (или "* "). Без вариантов вопросы не покажутся. Пример:
+Пример:
 [QUESTIONS]
 1. Какой объём анализа нужен?
 - краткий обзор
@@ -78,9 +84,22 @@ AGENT_SYSTEM_PROMPT_BASE = """Ты — помощник по созданию и
 - для команды
 - для широкой аудитории
 [/QUESTIONS]
-Варианты до 40 символов, 2–5 на вопрос.
 
-Запрещено: просить прислать эссе, код, текст. Разрешено: черновик промпта, уточнение цели/аудитории/формата, правки готового промпта."""
+Отдельный сценарий: если в запросе явно дан текущий промпт и далее текст с уточнениями/правками к нему, это НЕ новый промпт, а правка существующего. В таком случае:
+• учитывай исходную цель и предыдущий вариант промпта;
+• обнови формулировки СТРОГО по указанным уточнениям;
+• НЕ добавляй новые детали, которых не было в уточнениях;
+• по возможности сохраняй структуру и формат прошлого варианта;
+• не игнорируй предыдущий промпт и не генерируй промпт “с нуля”.
+
+Шаг 4 — Формат ответа (обязательно один из двух):
+
+1) Готовый промпт — разметка [PROMPT] и [/PROMPT] (каждый тег на отдельной строке). До [PROMPT] — краткий комментарий, после [/PROMPT] — уточнения если нужно.
+
+2) Уточняющие вопросы — как описано выше, разметка [QUESTIONS] и [/QUESTIONS].
+
+Запрещено: просить прислать эссе, код, текст. Разрешено: черновик промпта, уточнение цели/аудитории/формата, правки готового промпта.
+ЗАПРЕЩЕНО добавлять в промпт детали, которых нет в запросе пользователя или его ответах на вопросы."""
 
 PREFERENCE_STYLE_LABELS = {"precise": "точные, по делу", "balanced": "сбалансированные", "creative": "развёрнутые с примерами"}
 PREFERENCE_GOAL_LABELS = {
@@ -110,7 +129,13 @@ QUESTIONS_CLOSE = "[/QUESTIONS]"
 
 
 def _parse_agent_questions(reply: str) -> list[dict] | None:
-    """Извлекает список вопросов из блока [QUESTIONS]...[/QUESTIONS]. Если у вопроса нет вариантов — подставляется «Пропустить»."""
+    """Извлекает список вопросов из блока [QUESTIONS]...[/QUESTIONS].
+
+    Пост-обработка:
+    - если у вопроса нет вариантов — подставляется «Пропустить»;
+    - количество вариантов ответа нормализуется к диапазону 2–5;
+    - общее число вопросов ограничено максимум 6.
+    """
     if QUESTIONS_OPEN not in reply or QUESTIONS_CLOSE not in reply:
         return None
     _, rest = reply.split(QUESTIONS_OPEN, 1)
@@ -139,7 +164,30 @@ def _parse_agent_questions(reply: str) -> list[dict] | None:
         if not current_q.get("options"):
             current_q["options"] = ["Пропустить"]
         questions.append(current_q)
-    return questions if questions else None
+
+    if not questions:
+        return None
+
+    # Нормализуем варианты ответов и ограничиваем количество вопросов
+    normalized: list[dict] = []
+    for q in questions:
+        opts = q.get("options") or []
+        # Обрезаем до максимум 5 вариантов
+        opts = opts[:5]
+        # Гарантируем минимум 2 варианта
+        if len(opts) < 2:
+            # Добавляем «Пропустить» как универсальный вариант, если его ещё нет
+            if "Пропустить" not in opts:
+                opts.append("Пропустить")
+        # Если после всех действий всё ещё 1 вариант (крайний случай) — дублируем его как второй
+        if len(opts) == 1:
+            opts.append(opts[0])
+        q["options"] = opts
+        normalized.append(q)
+
+    # Максимум 6 вопросов
+    normalized = normalized[:6]
+    return normalized
 
 
 def _parse_agent_reply(reply: str) -> tuple[str, str, str]:
@@ -189,7 +237,18 @@ def _agent_metrics_line(original: str, optimized: str) -> str | None:
     orig_words = len(original.split())
     opt_words = len(optimized.split())
     pct = ((opt_len - orig_len) / orig_len * 100) if orig_len else 0
-    return f"📈 Длина: {orig_len} → {opt_len} симв. ({pct:+.1f}%) | Слова: {orig_words} → {opt_words}"
+    diff_words = opt_words - orig_words
+    if pct > 20:
+        interp = "промпт стал заметно длиннее — добавлена структура и детали"
+    elif pct < -20:
+        interp = "промпт стал короче — убрана лишняя информация, оставлено главное"
+    else:
+        interp = "длина почти не изменилась — улучшена формулировка без сильного изменения объёма"
+    return (
+        f"📈 Длина: {orig_len} → {opt_len} симв. ({pct:+.1f}%) | "
+        f"Слова: {orig_words} → {opt_words} ({diff_words:+d})\n"
+        f"💡 {interp}"
+    )
 
 
 def _rouge_scores(reference: str, candidate: str) -> tuple[float, float] | None:
@@ -273,6 +332,77 @@ async def _send_long_message(message: Message, text: str, parse_mode: str | None
     for i, part in enumerate(parts):
         mk = reply_markup if i == len(parts) - 1 else None
         await message.answer(part, parse_mode=parse_mode, reply_markup=mk)
+
+
+# Размер обёртки <blockquote><pre>...</pre></blockquote> для копируемого блока
+_PRE_BLOCK = "<blockquote><pre>"
+_POST_BLOCK = "</pre></blockquote>"
+_MAX_PRE_CHUNK = TELEGRAM_MAX_MESSAGE_LENGTH - len(_PRE_BLOCK) - len(_POST_BLOCK) - 50  # запас под HTML-экранирование и т.п.
+
+
+def _chunk_for_pre_block(text: str, max_len: int = _MAX_PRE_CHUNK) -> list[str]:
+    """Разбивает текст на части, помещающиеся в один <pre> (не режет HTML). По возможности режет по переводу строки."""
+    if not text or not text.strip():
+        return []
+    if len(text) <= max_len:
+        return [text]
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = min(start + max_len, len(text))
+        if end < len(text):
+            last_nl = text.rfind("\n", start, end + 1)
+            if last_nl >= start:
+                end = last_nl + 1
+        chunks.append(text[start:end])
+        start = end
+    return chunks
+
+
+async def _send_agent_reply_safe(
+    message: Message,
+    intro: str,
+    prompt_block: str,
+    outro: str,
+    extra_lines: list[str],
+    reply_markup=None,
+):
+    """
+    Отправляет ответ агента без разрыва HTML: intro, затем промпт в одном или нескольких
+    <blockquote><pre>-блоках, затем outro + метрики. Кнопки только под последним сообщением.
+    """
+    # 1) Intro отдельным сообщением (или несколькими, если не влезает)
+    if intro and intro.strip():
+        intro_esc = _html_escape(intro.strip())
+        if len(intro_esc) <= TELEGRAM_MAX_MESSAGE_LENGTH:
+            await message.answer(intro_esc, parse_mode="HTML")
+        else:
+            await _send_long_message(message, intro_esc, parse_mode="HTML")
+
+    # 2) Промпт — один или несколько копируемых блоков
+    footer_parts = []
+    if outro and outro.strip():
+        footer_parts.append(_html_escape(outro.strip()))
+    if extra_lines:
+        footer_parts.append("\n".join(extra_lines))
+    footer = "\n\n".join(footer_parts)
+    last_gets_markup = reply_markup if not footer else None
+
+    if prompt_block and prompt_block.strip():
+        escaped = _html_escape(prompt_block)
+        chunks = _chunk_for_pre_block(escaped)
+        for i, chunk in enumerate(chunks):
+            part = f"{_PRE_BLOCK}{chunk}{_POST_BLOCK}"
+            if i < len(chunks) - 1:
+                part += "\n\n… (продолжение ниже)"
+            mk = last_gets_markup if (i == len(chunks) - 1 and not footer) else None
+            await message.answer(part, parse_mode="HTML", reply_markup=mk)
+
+    # 3) Outro + метрики в последнем сообщении с кнопками
+    if footer:
+        await message.answer(footer, parse_mode="HTML", reply_markup=reply_markup)
+    elif reply_markup and not (prompt_block and prompt_block.strip()):
+        await message.answer("📋 Готово.", parse_mode="HTML", reply_markup=reply_markup)
 
 
 def _is_llm_provider_error(exc: Exception) -> bool:
@@ -510,46 +640,55 @@ async def handle_prompt(
             await db_manager.add_agent_message(user_id, "user", user_prompt)
             await db_manager.add_agent_message(user_id, "assistant", reply)
             await processing_msg.delete()
+            intro, prompt_block, outro = _parse_agent_reply(reply)
+            extra = []
+            if prompt_block.strip():
+                previous_agent_prompt = _get_previous_agent_prompt(history)
+                baseline = previous_agent_prompt if previous_agent_prompt else user_prompt
+                metrics_line = _agent_metrics_line(baseline, prompt_block)
+                if metrics_line:
+                    extra.append(metrics_line)
+                if previous_agent_prompt:
+                    rouge_prev = _rouge_line("Предыдущий вариант → подправленный", previous_agent_prompt, prompt_block)
+                    if rouge_prev:
+                        extra.append(rouge_prev)
+                    scores_prev = _rouge_scores(previous_agent_prompt, prompt_block)
+                    rouge_r1 = scores_prev[0] if scores_prev else None
+                    why_line = _why_better_line(previous_agent_prompt, prompt_block, rouge_r1)
+                else:
+                    rouge_orig = _rouge_line("Похожесть на исходный запрос", user_prompt, prompt_block)
+                    if rouge_orig:
+                        extra.append(rouge_orig)
+                    scores = _rouge_scores(user_prompt, prompt_block)
+                    rouge_r1 = scores[0] if scores else None
+                    why_line = _why_better_line(user_prompt, prompt_block, rouge_r1)
+                if why_line:
+                    extra.append(why_line)
             try:
-                formatted = _format_agent_reply_for_telegram(reply)
-                _, prompt_block, _ = _parse_agent_reply(reply)
-                if prompt_block.strip():
-                    previous_agent_prompt = _get_previous_agent_prompt(history)
-                    baseline = previous_agent_prompt if previous_agent_prompt else user_prompt
-                    extra = []
-                    metrics_line = _agent_metrics_line(baseline, prompt_block)
-                    if metrics_line:
-                        extra.append(metrics_line)
-                    if previous_agent_prompt:
-                        rouge_prev = _rouge_line("Предыдущий вариант → подправленный", previous_agent_prompt, prompt_block)
-                        if rouge_prev:
-                            extra.append(rouge_prev)
-                        scores_prev = _rouge_scores(previous_agent_prompt, prompt_block)
-                        rouge_r1 = scores_prev[0] if scores_prev else None
-                        why_line = _why_better_line(previous_agent_prompt, prompt_block, rouge_r1)
-                    else:
-                        rouge_orig = _rouge_line("Похожесть на исходный запрос", user_prompt, prompt_block)
-                        if rouge_orig:
-                            extra.append(rouge_orig)
-                        scores = _rouge_scores(user_prompt, prompt_block)
-                        rouge_r1 = scores[0] if scores else None
-                        why_line = _why_better_line(user_prompt, prompt_block, rouge_r1)
-                    if why_line:
-                        extra.append(why_line)
+                await _send_agent_reply_safe(
+                    message,
+                    intro=intro,
+                    prompt_block=prompt_block or "",
+                    outro=outro,
+                    extra_lines=extra,
+                    reply_markup=get_agent_result_keyboard(),
+                )
+            except Exception as e:
+                logger.warning("_send_agent_reply_safe failed, fallback to plain text: %s", e)
+                # Безопасный fallback: без сырого [PROMPT], промпт в виде текста по частям
+                if prompt_block and prompt_block.strip():
+                    chunks = _chunk_for_pre_block(prompt_block)
+                    for i, chunk in enumerate(chunks):
+                        msg_text = chunk if len(chunks) == 1 else chunk + "\n\n… (продолжение ниже)"
+                        await message.answer(msg_text, reply_markup=get_agent_result_keyboard() if i == len(chunks) - 1 else None)
+                else:
+                    safe_text = (intro or "") + (outro or "")
                     if extra:
-                        formatted += "\n\n" + "\n".join(extra)
-                await _send_long_message(
-                    message,
-                    formatted,
-                    parse_mode="HTML",
-                    reply_markup=get_agent_result_keyboard()
-                )
-            except Exception:
-                await _send_long_message(
-                    message,
-                    reply[:TELEGRAM_MAX_MESSAGE_LENGTH - 50] + "\n\n… (сообщение обрезано)" if len(reply) > TELEGRAM_MAX_MESSAGE_LENGTH else reply,
-                    reply_markup=get_agent_result_keyboard()
-                )
+                        safe_text += "\n\n" + "\n".join(extra)
+                    safe_text = safe_text.strip() or "Ответ не удалось отформатировать."
+                    if len(safe_text) > TELEGRAM_MAX_MESSAGE_LENGTH:
+                        safe_text = safe_text[: TELEGRAM_MAX_MESSAGE_LENGTH - 50] + "\n\n… (обрезано)"
+                    await message.answer(safe_text, reply_markup=get_agent_result_keyboard())
         except Exception as e:
             error_code = type(e).__name__
             logger.error(f"Ошибка в режиме агента: {e}", exc_info=True)
@@ -600,7 +739,19 @@ async def handle_prompt(
 
         escaped = _html_escape(optimized)
         header = "✨ <b>Оптимизированный промпт:</b> (нажми на блок, чтобы скопировать)"
-        metrics = f"📈 Длина: {original_length} → {optimized_length} симв. ({((optimized_length - original_length) / original_length * 100):+.1f}%) | Слова: {original_words} → {optimized_words}"
+        pct = ((optimized_length - original_length) / original_length * 100) if original_length else 0
+        diff_words = optimized_words - original_words
+        if pct > 20:
+            interp = "промпт стал заметно длиннее — добавлена структура и детали"
+        elif pct < -20:
+            interp = "промпт стал короче — убрана лишняя информация, оставлено главное"
+        else:
+            interp = "длина почти не изменилась — улучшена формулировка без сильного изменения объёма"
+        metrics = (
+            f"📈 Длина: {original_length} → {optimized_length} симв. ({pct:+.1f}%) | "
+            f"Слова: {original_words} → {optimized_words} ({diff_words:+d})\n"
+            f"💡 {interp}"
+        )
         prompt_block = f"<blockquote><pre>{escaped}</pre></blockquote>"
         if len(escaped) <= 3500:
             await message.answer(
