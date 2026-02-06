@@ -32,6 +32,7 @@ from bot.handlers.commands import (
     AGENT_SYSTEM_PROMPT_BASE,
     _format_agent_reply_for_telegram,
     _parse_agent_reply,
+    _reply_has_prompt_block,
     _parse_agent_questions,
     _get_previous_agent_prompt,
     _agent_metrics_line,
@@ -498,7 +499,9 @@ async def callback_agent_question_answer(
         user_content = (
             f"Исходный запрос пользователя:\n{original_request}\n\n"
             f"Ответы на уточняющие вопросы:\n{answers_text}\n\n"
-            "Сформируй итоговый промпт и верни его в [PROMPT] и [/PROMPT] (каждый тег на отдельной строке). Только промпт, без лишнего текста после [/PROMPT]."
+            "КРИТИЧНО: Пользователь УЖЕ ответил на ВСЕ уточняющие вопросы. Твоя задача — сформировать ОДИН готовый промпт.\n"
+            "Сейчас ожидается СТРОГО один ответ: блок [PROMPT] и [/PROMPT] (каждый тег на отдельной строке). Никаких [QUESTIONS] и новых вопросов.\n"
+            "ОБЯЗАТЕЛЬНО верни результат ТОЛЬКО в формате [PROMPT]...[/PROMPT]. ЗАПРЕЩЕНО возвращать [QUESTIONS] или писать что-то после [/PROMPT]."
         )
         await callback.message.edit_text("🔄 Формирую промпт...")
         await state.clear()
@@ -518,6 +521,13 @@ async def callback_agent_question_answer(
             user_msg_for_history = original_request + "\n\nОтветы на вопросы:\n" + answers_text
             await db_manager.add_agent_message(user_id, "user", user_msg_for_history)
             await db_manager.add_agent_message(user_id, "assistant", reply)
+            if not _reply_has_prompt_block(reply):
+                await callback.message.answer(
+                    "⚠️ Модель вернула уточнения вместо готового промпта. "
+                    "Напиши свои пожелания текстом — я соберу по ним промпт.",
+                    reply_markup=get_agent_result_keyboard(),
+                )
+                return
             intro, prompt_block, outro = _parse_agent_reply(reply)
             extra = []
             if prompt_block.strip():
@@ -568,9 +578,10 @@ async def callback_agent_question_answer(
         system_prompt = (prefs + "\n\n" + AGENT_SYSTEM_PROMPT_BASE) if prefs else AGENT_SYSTEM_PROMPT_BASE
         user_content = (
             "Пользователь хочет получить итоговый промпт СРАЗУ, без дополнительных уточняющих вопросов.\n"
-            "Сформируй промпт только на основе этого запроса, не добавляя новых деталей:\n\n"
+            "Сформируй промпт только на основе запроса ниже, не добавляя новых деталей.\n\n"
             f"{original_request}\n\n"
-            "Верни промпт в [PROMPT] и [/PROMPT] (каждый тег на отдельной строке). Только промпт, без лишнего текста после [/PROMPT]."
+            "Ответ должен быть СТРОГО в виде одного блока [PROMPT]...[/PROMPT]. Не возвращай [QUESTIONS].\n"
+            "ОБЯЗАТЕЛЬНО верни результат ТОЛЬКО в формате [PROMPT] и [/PROMPT] (каждый тег на отдельной строке)."
         )
         await callback.message.edit_text("🔄 Формирую промпт без дополнительных вопросов...")
         await state.clear()
@@ -589,6 +600,13 @@ async def callback_agent_question_answer(
             )
             await db_manager.add_agent_message(user_id, "user", original_request)
             await db_manager.add_agent_message(user_id, "assistant", reply)
+            if not _reply_has_prompt_block(reply):
+                await callback.message.answer(
+                    "⚠️ Модель вернула уточнения вместо готового промпта. "
+                    "Напиши свои пожелания текстом — я соберу по ним промпт.",
+                    reply_markup=get_agent_result_keyboard(),
+                )
+                return
             intro, prompt_block, outro = _parse_agent_reply(reply)
             extra = []
             if prompt_block.strip():
@@ -711,10 +729,83 @@ async def callback_agent_continue(
     previous_agent_prompt = _get_previous_agent_prompt(history)
     
     if not previous_agent_prompt:
-        await callback.message.answer(
-            "❌ Не найден текущий промпт для уточнения.\n\n"
-            "Просто напиши свой запрос или уточнение, и я помогу."
+        # В истории нет готового промпта (например, модель вернула [QUESTIONS] вместо [PROMPT]).
+        # Берём последнее сообщение пользователя и запрашиваем уточняющие вопросы заново.
+        last_user_content = ""
+        for msg in reversed(history):
+            if msg.get("role") == "user":
+                last_user_content = msg.get("content", "").strip()
+                break
+        if not last_user_content:
+            await callback.message.answer(
+                "Сейчас в диалоге ещё нет готового промпта. "
+                "Напиши в чат свой запрос текстом — я сформирую промпт заново. "
+                "Либо нажми «Принять промпт» и начни новый запрос.",
+                reply_markup=get_agent_result_keyboard(),
+            )
+            return
+        prefs_text = _format_preferences_for_prompt(user)
+        system_prompt = (prefs_text + "\n\n" + AGENT_SYSTEM_PROMPT_BASE) if prefs_text else AGENT_SYSTEM_PROMPT_BASE
+        user_content = (
+            "Пользователь хочет получить уточняющие вопросы по этому запросу. "
+            "Задай уточняющие вопросы в формате [QUESTIONS]...[/QUESTIONS]. "
+            "Не возвращай [PROMPT]. Исходный запрос пользователя:\n\n"
+            f"{last_user_content}"
         )
+        provider = user["llm_provider"] or "trinity"
+        temperature = float(user.get("temperature", 0.4))
+        processing_msg = await callback.message.answer("🔄 Готовлю уточняющие вопросы по твоему запросу...")
+        try:
+            reply = await llm_service.chat_with_history(
+                user_content=user_content,
+                history=[],
+                system_prompt=system_prompt,
+                provider=provider,
+                temperature=temperature,
+            )
+            await processing_msg.delete()
+            questions = _parse_agent_questions(reply)
+            if questions:
+                intro = reply.split(QUESTIONS_OPEN)[0].strip() if QUESTIONS_OPEN in reply else ""
+                await state.set_state(AgentStates.answering_questions)
+                await state.update_data(
+                    agent_original_request=last_user_content,
+                    agent_questions=questions,
+                    agent_answers={},
+                    agent_provider=provider,
+                    agent_prefs=prefs_text or "",
+                )
+                answers = {}
+                for i, q in enumerate(questions):
+                    text = _html_escape(q["question"])
+                    if intro and i == 0:
+                        text = _html_escape(intro) + "\n\n" + text
+                    await callback.message.answer(
+                        text,
+                        parse_mode="HTML",
+                        reply_markup=get_agent_question_single_keyboard(
+                            i, q, answers, i == len(questions) - 1
+                        ),
+                    )
+                await callback.message.answer(
+                    "💡 Или напиши своё уточнение текстом — я обработаю его.",
+                    reply_markup=None,
+                )
+            else:
+                await callback.message.answer(
+                    "Сейчас в диалоге ещё нет готового промпта. "
+                    "Напиши в чат свой запрос или пожелания текстом — я соберу по ним промпт. "
+                    "Либо нажми «Принять промпт» и начни новый запрос.",
+                    reply_markup=get_agent_result_keyboard(),
+                )
+        except Exception as e:
+            logger.warning("Ошибка при запросе уточняющих вопросов: %s", e)
+            await processing_msg.delete()
+            await callback.message.answer(
+                "Сейчас в диалоге ещё нет готового промпта. "
+                "Напиши в чат свой запрос текстом — я сформирую промпт заново.",
+                reply_markup=get_agent_result_keyboard(),
+            )
         return
     
     # Формируем запрос агенту: проанализировать промпт и задать уточняющие вопросы
@@ -781,6 +872,13 @@ async def callback_agent_continue(
             )
         else:
             # Агент дал улучшенный промпт или комментарий
+            if not _reply_has_prompt_block(reply):
+                await callback.message.answer(
+                    "⚠️ Модель вернула уточнения вместо готового промпта. "
+                    "Напиши свои пожелания текстом — я обработаю их.",
+                    reply_markup=get_agent_result_keyboard(),
+                )
+                return
             intro, prompt_block, outro = _parse_agent_reply(reply)
             extra = []
             if prompt_block.strip():

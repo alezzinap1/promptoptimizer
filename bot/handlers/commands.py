@@ -99,7 +99,12 @@ AGENT_SYSTEM_PROMPT_BASE = """Ты — помощник по созданию и
 2) Уточняющие вопросы — как описано выше, разметка [QUESTIONS] и [/QUESTIONS].
 
 Запрещено: просить прислать эссе, код, текст. Разрешено: черновик промпта, уточнение цели/аудитории/формата, правки готового промпта.
-ЗАПРЕЩЕНО добавлять в промпт детали, которых нет в запросе пользователя или его ответах на вопросы."""
+ЗАПРЕЩЕНО добавлять в промпт детали, которых нет в запросе пользователя или его ответах на вопросы.
+
+ФИНАЛЬНЫЙ ПРОМПТ (обязательное правило):
+Когда в запросе явно сказано, что нужно вернуть «итоговый промпт», «готовый промпт», что «пользователь уже ответил на все вопросы» или «дать промпт сразу» — ты ОБЯЗАН ответить ТОЛЬКО блоком [PROMPT]...[/PROMPT] с готовым текстом промпта внутри.
+В этом случае ЗАПРЕЩЕНО: возвращать [QUESTIONS] или задавать новые вопросы; писать после [/PROMPT] что-либо кроме краткого пояснения (1–2 фразы при необходимости); просить что-то уточнить вместо выдачи промпта.
+Если информации из запроса и ответов пользователя достаточно — составляй промпт и возвращай в [PROMPT]...[/PROMPT]. Если чего-то не хватает — всё равно сформируй лучший возможный промпт по имеющимся данным и верни его в [PROMPT]...[/PROMPT]."""
 
 PREFERENCE_STYLE_LABELS = {"precise": "точные, по делу", "balanced": "сбалансированные", "creative": "развёрнутые с примерами"}
 PREFERENCE_GOAL_LABELS = {
@@ -126,6 +131,17 @@ PROMPT_OPEN = "[PROMPT]"
 PROMPT_CLOSE = "[/PROMPT]"
 QUESTIONS_OPEN = "[QUESTIONS]"
 QUESTIONS_CLOSE = "[/QUESTIONS]"
+
+
+def _reply_has_prompt_block(reply: str) -> bool:
+    """True, если в ответе есть блок [PROMPT]...[/PROMPT] с непустым содержимым."""
+    if PROMPT_OPEN not in reply or PROMPT_CLOSE not in reply:
+        return False
+    _, rest = reply.split(PROMPT_OPEN, 1)
+    if PROMPT_CLOSE not in rest:
+        return False
+    block, _ = rest.split(PROMPT_CLOSE, 1)
+    return bool(block and block.strip())
 
 
 def _parse_agent_questions(reply: str) -> list[dict] | None:
@@ -640,6 +656,13 @@ async def handle_prompt(
             await db_manager.add_agent_message(user_id, "user", user_prompt)
             await db_manager.add_agent_message(user_id, "assistant", reply)
             await processing_msg.delete()
+            if not _reply_has_prompt_block(reply):
+                await message.answer(
+                    "⚠️ Модель вернула уточнения вместо готового промпта. "
+                    "Напиши свои пожелания текстом — я соберу по ним промпт.",
+                    reply_markup=get_agent_result_keyboard(),
+                )
+                return
             intro, prompt_block, outro = _parse_agent_reply(reply)
             extra = []
             if prompt_block.strip():
